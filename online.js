@@ -167,7 +167,7 @@
         filter.chosen('filter', select);
       };
 
-      this.extractFile = function (str) {
+      this.extractFile = function (str, max_quality) {
         var url = '';
 
         try {
@@ -181,7 +181,7 @@
             return b.quality - a.quality;
           });
           url = items[0].file;
-          url = 'http:' + url.slice(0, url.length - 32) + '.mp4';
+          url = 'http:' + url.slice(0, url.lastIndexOf('/')) + '/' + (max_quality || items[0].quality) + '.mp4';
         } catch (e) {}
 
         return url;
@@ -195,19 +195,39 @@
         extract = {};
 
         if (movie) {
-          network["native"]('http:' + movie.iframe_src, function (raw) {
+          var src = movie.iframe_src; // movie.iframe_src.replace('58.svetacdn.in/0HlZgU1l1mw5','4432.svetacdn.in/Z9w3z4ZBIQxF')
+
+          network["native"]('http:' + src, function (raw) {
             var math = raw.replace(/\n/g, '').match(/id="files" value="(.*?)"/);
 
             if (math) {
               var json = Lampa.Arrays.decodeJson(math[1].replace(/&quot;/g, '"'), {});
               var text = document.createElement("textarea");
 
-              for (var i in json) {
+              var _loop = function _loop(i) {
+                var _movie$media, _movie$media$filter$;
+
+                if (0 === i - 0) {
+                  return "continue";
+                }
+
                 text.innerHTML = json[i];
                 Lampa.Arrays.decodeJson(text.value, {});
+                var max_quality = (_movie$media = movie.media) === null || _movie$media === void 0 ? void 0 : (_movie$media$filter$ = _movie$media.filter(function (obj) {
+                  return obj.translation_id === i - 0;
+                })[0]) === null || _movie$media$filter$ === void 0 ? void 0 : _movie$media$filter$.max_quality;
+
+                if (!max_quality) {
+                  var _movie$translations, _movie$translations$f;
+
+                  max_quality = (_movie$translations = movie.translations) === null || _movie$translations === void 0 ? void 0 : (_movie$translations$f = _movie$translations.filter(function (obj) {
+                    return obj.id === i - 0;
+                  })[0]) === null || _movie$translations$f === void 0 ? void 0 : _movie$translations$f.max_quality;
+                }
+
                 extract[i] = {
                   json: Lampa.Arrays.decodeJson(text.value, {}),
-                  file: _this2.extractFile(json[i])
+                  file: _this2.extractFile(json[i], max_quality)
                 };
 
                 for (var a in extract[i].json) {
@@ -216,10 +236,16 @@
                   if (elem.folder) {
                     for (var f in elem.folder) {
                       var folder = elem.folder[f];
-                      folder.file = _this2.extractFile(folder.file);
+                      folder.file = _this2.extractFile(folder.file, max_quality);
                     }
-                  } else elem.file = _this2.extractFile(elem.file);
+                  } else elem.file = _this2.extractFile(elem.file, max_quality);
                 }
+              };
+
+              for (var i in json) {
+                var _ret = _loop(i);
+
+                if (_ret === "continue") continue;
               }
             }
           }, false, false, {
@@ -315,9 +341,10 @@
         scroll.clear();
       };
 
-      this.getFile = function (element, show_error) {
+      this.getFile = function (element, max_quality, show_error) {
         var translat = extract[element.translation];
         var id = element.season + '_' + element.episode;
+        var file = '';
 
         if (translat) {
           if (element.season) {
@@ -327,16 +354,31 @@
               if (elem.folder) {
                 for (var f in elem.folder) {
                   var folder = elem.folder[f];
-                  if (folder.id == id) return folder.file;
+
+                  if (folder.id == id) {
+                    file = folder.file;
+                    break;
+                  }
                 }
               } else if (elem.id == id) {
-                return elem.file;
+                file = elem.file;
+                break;
               }
             }
-          } else return translat.file;
+          } else {
+            file = translat.file;
+          }
         }
 
-        if (show_error) Lampa.Noty.show('Не удалось извлечь ссылку');
+        max_quality = parseInt(max_quality);
+
+        if (file) {
+          if (file.split('/').pop().replace('.mp4', '') !== max_quality) {
+            file = file.slice(0, file.lastIndexOf('/')) + '/' + max_quality + '.mp4';
+          }
+        } else if (show_error) Lampa.Noty.show('Не удалось извлечь ссылку');
+
+        return file;
       };
 
       this.append = function (items) {
@@ -351,26 +393,33 @@
             last = e.target;
             scroll.update($(e.target), true);
           }).on('hover:enter', function () {
-            var file = _this4.getFile(element, true);
+            if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
+
+            var file = _this4.getFile(element, element.quality, true);
 
             if (file) {
               _this4.start();
 
-              Lampa.Player.play({
+              var playlist = [];
+              var first = {
                 url: file,
                 timeline: view,
                 title: element.season ? element.title : object.movie.title + ' / ' + element.title
-              });
-              var playlist = [];
-              items.forEach(function (elem) {
-                playlist.push({
-                  title: elem.title,
-                  url: _this4.getFile(elem)
+              };
+              Lampa.Player.play(first);
+
+              if (element.season) {
+                items.forEach(function (elem) {
+                  playlist.push({
+                    title: elem.title,
+                    url: _this4.getFile(elem, elem.quality)
+                  });
                 });
-              });
+              } else {
+                playlist.push(first);
+              }
+
               Lampa.Player.playlist(playlist);
-            } else {
-              Lampa.Noty.show('Не удалось извлечь ссылку');
             }
           });
           scroll.append(item);
@@ -425,26 +474,31 @@
       };
     }
 
-    Lampa.Component.add('online', component);
-    Lampa.Template.add('button_online', "<div class=\"full-start__button selector view--online\">\n<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:svgjs=\"http://svgjs.com/svgjs\" version=\"1.1\" width=\"512\" height=\"512\" x=\"0\" y=\"0\" viewBox=\"0 0 30.051 30.051\" style=\"enable-background:new 0 0 512 512\" xml:space=\"preserve\" class=\"\">\n<g xmlns=\"http://www.w3.org/2000/svg\">\n    <path d=\"M19.982,14.438l-6.24-4.536c-0.229-0.166-0.533-0.191-0.784-0.062c-0.253,0.128-0.411,0.388-0.411,0.669v9.069   c0,0.284,0.158,0.543,0.411,0.671c0.107,0.054,0.224,0.081,0.342,0.081c0.154,0,0.31-0.049,0.442-0.146l6.24-4.532   c0.197-0.145,0.312-0.369,0.312-0.607C20.295,14.803,20.177,14.58,19.982,14.438z\" fill=\"currentColor\"/>\n    <path d=\"M15.026,0.002C6.726,0.002,0,6.728,0,15.028c0,8.297,6.726,15.021,15.026,15.021c8.298,0,15.025-6.725,15.025-15.021   C30.052,6.728,23.324,0.002,15.026,0.002z M15.026,27.542c-6.912,0-12.516-5.601-12.516-12.514c0-6.91,5.604-12.518,12.516-12.518   c6.911,0,12.514,5.607,12.514,12.518C27.541,21.941,21.937,27.542,15.026,27.542z\" fill=\"currentColor\"/>\n</g></svg>\n\n<span>\u041E\u043D\u043B\u0430\u0439\u043D</span>\n</div>");
-    Lampa.Template.add('online', "<div class=\"online selector\">\n    <div class=\"online__body\">\n        <div class=\"online__title\">{title}</div>\n        <div class=\"online__quality\">{quality}</div>\n    </div>\n</div>");
-    Lampa.Listener.follow('full', function (e) {
-      if (e.type == 'complite') {
-        var btn = Lampa.Template.get('button_online');
-        btn.on('hover:enter', function () {
-          Lampa.Activity.push({
-            url: '',
-            title: 'Онлайн',
-            component: 'online',
-            search: e.data.movie.title,
-            search_one: e.data.movie.title,
-            search_two: e.data.movie.original_title,
-            movie: e.data.movie,
-            page: 1
+    function startPlugin() {
+      window.plugin_online_ready = true;
+      Lampa.Component.add('online', component);
+      Lampa.Template.add('button_online', "<div class=\"full-start__button selector view--online\">\n    <svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:svgjs=\"http://svgjs.com/svgjs\" version=\"1.1\" width=\"512\" height=\"512\" x=\"0\" y=\"0\" viewBox=\"0 0 30.051 30.051\" style=\"enable-background:new 0 0 512 512\" xml:space=\"preserve\" class=\"\">\n    <g xmlns=\"http://www.w3.org/2000/svg\">\n        <path d=\"M19.982,14.438l-6.24-4.536c-0.229-0.166-0.533-0.191-0.784-0.062c-0.253,0.128-0.411,0.388-0.411,0.669v9.069   c0,0.284,0.158,0.543,0.411,0.671c0.107,0.054,0.224,0.081,0.342,0.081c0.154,0,0.31-0.049,0.442-0.146l6.24-4.532   c0.197-0.145,0.312-0.369,0.312-0.607C20.295,14.803,20.177,14.58,19.982,14.438z\" fill=\"currentColor\"/>\n        <path d=\"M15.026,0.002C6.726,0.002,0,6.728,0,15.028c0,8.297,6.726,15.021,15.026,15.021c8.298,0,15.025-6.725,15.025-15.021   C30.052,6.728,23.324,0.002,15.026,0.002z M15.026,27.542c-6.912,0-12.516-5.601-12.516-12.514c0-6.91,5.604-12.518,12.516-12.518   c6.911,0,12.514,5.607,12.514,12.518C27.541,21.941,21.937,27.542,15.026,27.542z\" fill=\"currentColor\"/>\n    </g></svg>\n\n    <span>\u041E\u043D\u043B\u0430\u0439\u043D</span>\n    </div>");
+      Lampa.Template.add('online', "<div class=\"online selector\">\n        <div class=\"online__body\">\n            <div class=\"online__title\">{title}</div>\n            <div class=\"online__quality\">{quality}</div>\n        </div>\n    </div>");
+      Lampa.Listener.follow('full', function (e) {
+        if (e.type == 'complite') {
+          var btn = Lampa.Template.get('button_online');
+          btn.on('hover:enter', function () {
+            Lampa.Activity.push({
+              url: '',
+              title: 'Онлайн',
+              component: 'online',
+              search: e.data.movie.title,
+              search_one: e.data.movie.title,
+              search_two: e.data.movie.original_title,
+              movie: e.data.movie,
+              page: 1
+            });
           });
-        });
-        e.object.activity.render().find('.view--torrent').after(btn);
-      }
-    });
+          e.object.activity.render().find('.view--torrent').after(btn);
+        }
+      });
+    }
+
+    if (!window.plugin_online_ready) startPlugin();
 
 })();
